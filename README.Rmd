@@ -271,4 +271,4 @@ summary(fit.gls2)
 
 ```
 
-On the overall, the latency observed across individuals decreased as a function of 79.64 units following intervention.
+On the overall, the latency observed across individuals decreased as a function of 79.64 units following intervention. This supports the notion that there was a significant change in latency, overall, given the response to intervention.

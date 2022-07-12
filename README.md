@@ -250,4 +250,6 @@ summary(fit.gls2)
     ## Degrees of freedom: 130 total; 128 residual
 
 On the overall, the latency observed across individuals decreased as a
-function of 79.64 units following intervention.
+function of 79.64 units following intervention. This supports the notion
+that there was a significant change in latency, overall, given the
+response to intervention.
