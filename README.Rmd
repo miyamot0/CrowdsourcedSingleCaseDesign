@@ -1,0 +1,274 @@
+---
+output: github_document 
+---
+
+# Single Case Design Evaluation
+
+[Shawn Gilroy](mailto:sgilroy1@lsu.edu), 7/11/2022
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.path = "plots/",
+                      dev = "png",
+                      dpi = 300)
+
+# Include for piping
+suppressPackageStartupMessages(library(dplyr))
+
+# Included for calculating FE CI's
+suppressPackageStartupMessages(library(emmeans))
+
+# Single-case plotting methods (MUST INSTALL FROM GITHUB, NOT CRAN)
+suppressPackageStartupMessages(library(fxl))
+
+# Methods for generating p-values for MLMs
+suppressPackageStartupMessages(library(lmtest))
+
+# Core fitting libraries
+suppressPackageStartupMessages(library(nlme))
+
+# Read in data 
+data = read.csv("CASCD_Data_Clean.csv") %>%
+  filter(!is.na(Latency))
+
+```
+
+## Descriptive Illustration of Data
+
+Just eyeballing the data, more evidence of a level shift than trend shift but wise to formally evaluate them all.
+
+```{r fxlOutputDescriptives, echo=FALSE}
+
+# Initial setup, sets core aesthetics (what data to show where)
+scr_plot(data, aesthetics = list(x     = Session,
+                                 y     = Latency,
+                                 p     = Phase,
+                                 facet = Participant),
+         mai = c(0.375, 0.375, 0.1,  0.0),
+         omi = c(0.25,  0.25,  0.25, 0.1)) %>%
+  scr_xoverride(c(1, 35),
+    xticks = c(1, 5, 10, 15, 20, 25, 30, 35)) %>%        # manually override x-axis (make extra room for labels)
+  scr_yoverride(c(0, 700),           # manually override y-axis and tick interval (tick every 10 units)
+                ydelta = 100) %>%
+  scr_points(cex = 1.25) %>%            # plot points, using x/y from aesthetics
+  scr_lines(size = 1) %>%            # plot lines, using x/y from aesthetics
+  scr_label_phase(facet  = "1",  # plot labels on specific facet
+                  cex    = 1,
+                  adj    = 0,
+                  y      = 700,
+                  labels = list(     # list of labels to draw (will use assigned key for label)
+                    "Baseline"       = list(x = 1),
+                    "Treatment"      = list(x = 13))) %>%
+  scr_label_facet(cex    = 1,         # plot labels across facets (not within a single facet)
+                  adj    = 1,
+                  y      = 750,
+                  labels = list(     # list of labels to draw (will use assigned key for label)
+                    "1" = list(x = 36, label = "Participant 1"),
+                    "2" = list(x = 36, label = "Participant 2"),
+                    "3" = list(x = 36, label = "Participant 3"),
+                    "4" = list(x = 36, label = "Participant 4"))) %>%
+  scr_plines_mbd(lines = list(       # plot linked phase lines (note: drawn from top through bottom)
+    "A" = list(                      # list of phase lines to draw (where to draw lines across each participant)
+      "1"  = list(x1 = 11.5,
+                  y1 = 700),
+      "2"  = list(x1 = 19.5,
+                  y1 = 700),
+      "3"  = list(x1 = 23.5,
+                  y1 = 700),
+      "4"  = list(x1 = 26.5,
+                  y1 = 700)
+    )
+  )) %>%
+  scr_xlabel("Session") %>%          # Override x-axis label (bottom only shown by default)
+  scr_ylabel("Latency") # Override y-axis label (centered, leftmost label)
+
+```
+
+## Fits using Ordinary Least Squares (OLS; Piecewise Level/Trend)
+
+Fits to a piecewise model evaluating changes in level/trend are first reviewed using OLS. Autocorrelated errors are potentially an issue and will need to be directly evaluated.
+
+```{r olsLT}
+fit.ols = lm(Latency ~ Session + Phase + SC, 
+             data = data)
+
+summary(fit.ols)
+
+acf(residuals(fit.ols))
+acf(residuals(fit.ols), type = "partial")
+dwtest(fit.ols, alternative = "two.sided")
+
+```
+
+Note: Durbin-Watson test suggests that degree of autocorrelation in OLS residuals is non-trivial. 
+
+## Fits using Generalized Least Squares (Piecewise Level/Trend)
+
+Generalized least squares approach fitted with an autoregressive correlation structure, with and without random effects.
+
+```{r glsLT}
+
+# Without random effects
+fit.gls = gls(Latency ~ Session + Phase + SC,
+              method = "ML",
+              correlation = corARMA(p = 1, 
+                                    form = ~ Session | Participant),
+              data = data)
+
+# With random intercepts and slopes per participant
+fit.lme = lme(Latency ~ Session + Phase + SC,
+              data = data,
+              method = "ML",
+              correlation = corARMA(p = 1, 
+                                    form = ~ Session | Participant),
+              random = ~ 1 + Phase + SC | Participant)
+
+anova(fit.gls, fit.lme)
+
+```
+
+Note: Comparing across fits using Likelihood Ratio Tests (Maximum Likelihood fits set for both), results indicated that the added complexity introduced by the random effects isn't justified, given the data.
+
+## Model Selection for Generalized Least Squares
+
+Minimal trending was observed in the data and factor specific to trend/changes in trend are evaluated.
+
+```{r glsModelSelection1}
+
+fit.gls2 = gls(Latency ~ Phase,
+               method = "ML",
+               correlation = corARMA(p = 1, 
+                                     form = ~ Session | Participant),
+               data = data)
+
+anova(fit.gls, fit.gls2)
+
+```
+
+Overall, given the data, the inclusion of a slope/slope change factor did not significantly improve model performance. TLDR; trend not worth the df.
+
+As a test against a null effect for phase differences, an intercept-only model was fitted and compared against the Phase-only model.
+
+```{r glsModelSelection2}
+
+fit.gls3 = gls(Latency ~ 1,
+               method = "ML",
+               correlation = corARMA(p = 1, 
+                                     form = ~ Session | Participant),
+               data = data)
+
+anova(fit.gls2, fit.gls3)
+
+```
+
+Results suggested that data were most likely to have emerged from a model featuring only Phase level differences.
+
+## Evaluating Autocorrelation Adjustments
+
+As a final point of adjustment, varying lag sizes are evaluated.
+
+```{r glsAutocorrelation}
+
+fit.gls2.1 = fit.gls2
+fit.gls2.2 = update(fit.gls2, 
+                    correlation = corARMA(p = 2, 
+                                          form = ~ Session | Participant))
+anova(fit.gls2.1, fit.gls2.2)
+
+fit.gls2.3 = update(fit.gls2, 
+                    correlation = corARMA(p = 3, 
+                                          form = ~ Session | Participant))
+anova(fit.gls2.1, fit.gls2.3)
+
+fit.gls2.4 = update(fit.gls2, 
+                    correlation = corARMA(p = 4, 
+                                          form = ~ Session | Participant))
+anova(fit.gls2.1, fit.gls2.4)
+
+```
+
+Results indicated that there were no significant improvements beyond a lag of 1.
+
+```{r fxlOutput, echo=FALSE}
+
+data$pred = predict(fit.gls2)
+
+output = summary(emmeans(fit.gls2, "Phase", data = data, type = "response"))
+
+data[data$Phase == "BL","LCL"]  <- output$lower.CL[1]
+data[data$Phase == "INT","LCL"] <- output$lower.CL[2]
+
+data[data$Phase == "BL","UCL"]  <- output$upper.CL[1]
+data[data$Phase == "INT","UCL"] <- output$upper.CL[2]
+
+# Initial setup, sets core aesthetics (what data to show where)
+scr_plot(data, aesthetics = list(x     = Session,
+                                 y     = Latency,
+                                 p     = Phase,
+                                 facet = Participant),
+         mai = c(0.375, 0.375, 0.1,  0.0),
+         omi = c(0.25,  0.25,  0.25, 0.1)) %>%
+  scr_xoverride(c(1, 35),
+    xticks = c(1, 5, 10, 15, 20, 25, 30, 35)) %>%        # manually override x-axis (make extra room for labels)
+  scr_yoverride(c(0, 700),           # manually override y-axis and tick interval (tick every 10 units)
+                ydelta = 100) %>%
+  scr_points(cex = 1.25) %>%            # plot points, using x/y from aesthetics
+  scr_lines(size = 1) %>%            # plot lines, using x/y from aesthetics
+  scr_lines(size = 1,
+            mapping = list(x = Session,
+                           y = pred,
+                           p = Phase),
+            color = "red") %>%
+  scr_lines(size = 1,
+            mapping = list(x = Session,
+                           y = LCL,
+                           p = Phase),
+            lty = 2,
+            color = "gray") %>%
+  scr_lines(size = 1,
+            mapping = list(x = Session,
+                           y = UCL,
+                           p = Phase),
+            lty = 2,
+            color = "gray") %>%
+  scr_label_phase(facet  = "1",  # plot labels on specific facet
+                  cex    = 1,
+                  adj    = 0,
+                  y      = 700,
+                  labels = list(     # list of labels to draw (will use assigned key for label)
+                    "Baseline"       = list(x = 1),
+                    "Treatment"      = list(x = 13))) %>%
+  scr_label_facet(cex    = 1,         # plot labels across facets (not within a single facet)
+                  adj    = 1,
+                  y      = 750,
+                  labels = list(     # list of labels to draw (will use assigned key for label)
+                    "1" = list(x = 36, label = "Participant 1"),
+                    "2" = list(x = 36, label = "Participant 2"),
+                    "3" = list(x = 36, label = "Participant 3"),
+                    "4" = list(x = 36, label = "Participant 4"))) %>%
+  scr_plines_mbd(lines = list(       # plot linked phase lines (note: drawn from top through bottom)
+    "A" = list(                      # list of phase lines to draw (where to draw lines across each participant)
+      "1"  = list(x1 = 11.5,
+                  y1 = 700),
+      "2"  = list(x1 = 19.5,
+                  y1 = 700),
+      "3"  = list(x1 = 23.5,
+                  y1 = 700),
+      "4"  = list(x1 = 26.5,
+                  y1 = 700)
+    )
+  )) %>%
+  scr_xlabel("Session") %>%          # Override x-axis label (bottom only shown by default)
+  scr_ylabel("Latency") # Override y-axis label (centered, leftmost label)
+
+```
+
+## Interpretation of Fixed Effects
+
+```{r fitResults}
+
+summary(fit.gls2)
+
+```
+
+On the overall, the latency observed across individuals decreased as a function of 79.64 units following intervention.
